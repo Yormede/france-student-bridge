@@ -179,7 +179,13 @@ def chat_completions():
             }
         )
     else:
-        return jsonify(json.loads("".join(generate())))
+        raw = "".join(generate())
+        if not raw.strip():
+            return jsonify({"finishedReason": "error", "errorMessage": "Bridge returned empty response", "content": {"text": ""}})
+        try:
+            return jsonify(json.loads(raw))
+        except Exception:
+            return jsonify({"finishedReason": "error", "errorMessage": f"Bridge parse error: {raw[:200]}", "content": {"text": ""}})
 
 
 @app.route("/chat/<chat_id>/message", methods=["POST"])
@@ -256,7 +262,13 @@ def send_chat_message(chat_id):
             }
         )
     else:
-        return jsonify(json.loads("".join(generate())))
+        raw = "".join(generate())
+        if not raw.strip():
+            return jsonify({"finishedReason": "error", "errorMessage": "Bridge returned empty response", "content": {"text": ""}})
+        try:
+            return jsonify(json.loads(raw))
+        except Exception:
+            return jsonify({"finishedReason": "error", "errorMessage": f"Bridge parse error: {raw[:200]}", "content": {"text": ""}})
 
 
 @app.route("/chat/<chat_id>", methods=["GET"])
