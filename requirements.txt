@@ -1,0 +1,4 @@
+httpx>=0.24.0
+flask>=3.0.0
+aiofiles>=23.0.0
+python-multipart>=0.0.6
