@@ -1,4 +1,4 @@
-import asyncio
+﻿import asyncio
 import json
 import os
 import time
@@ -11,6 +11,8 @@ from auth import AuthManager
 from api_client import FranceStudentAPI
 from sse_parser import extract_output_from_events
 from image_handler import download_images_from_output
+from tool_loop import ToolLoop, parse_function_call, has_function_call, strip_function_call, build_tool_result_message
+from openai_adapter import openai_messages_to_text, openai_response_to_sse
 
 app = Flask(__name__)
 
@@ -19,6 +21,7 @@ api = FranceStudentAPI(auth)
 
 CACHED_MODELS = []
 MODELS_LAST_FETCH = 0
+TOOL_LOOPS = {}  # chat_uuid -> ToolLoop instance, pour la boucle tools
 
 
 def _run_async(coro):
@@ -49,6 +52,21 @@ def _get_default_agent_id():
         return CACHED_MODELS[0]["id"]
     return DEFAULT_AGENT_ID
 
+
+def _resolve_agent_id(agent_id):
+    """Résout un nom de modèle ou ID numérique en agent_id."""
+    if isinstance(agent_id, int):
+        return agent_id
+    if isinstance(agent_id, str) and agent_id.isdigit():
+        return int(agent_id)
+    if isinstance(agent_id, str):
+        for m in CACHED_MODELS:
+            if m["name"].lower() == agent_id.lower() or m["model"].lower() == agent_id.lower():
+                return m["id"]
+    return _get_default_agent_id()
+
+
+# ── Routes existantes ──────────────────────────────────────────────
 
 @app.route("/health", methods=["GET"])
 def health():
@@ -96,6 +114,26 @@ def get_models():
             return jsonify({"models": CACHED_MODELS, "count": len(CACHED_MODELS), "cached": True})
         return jsonify({"error": str(e)}), 500
 
+
+
+@app.route("/v1/models", methods=["GET"])
+def openai_models():
+    """Endpoint OpenAI-compatible /v1/models."""
+    global CACHED_MODELS
+    if not CACHED_MODELS:
+        try:
+            CACHED_MODELS = _run_async(api.get_models())
+        except Exception:
+            pass
+    data = []
+    for m in CACHED_MODELS:
+        data.append({
+            "id": m["name"],
+            "object": "model",
+            "created": int(time.time()),
+            "owned_by": m.get("modelProvider", "unknown"),
+        })
+    return jsonify({"object": "list", "data": data})
 
 @app.route("/chat/completions", methods=["POST"])
 def chat_completions():
@@ -187,6 +225,151 @@ def chat_completions():
         except Exception:
             return jsonify({"finishedReason": "error", "errorMessage": f"Bridge parse error: {raw[:200]}", "content": {"text": ""}})
 
+
+# ── NOUVEAU : /v1/chat/completions OpenAI-compatible ───────────────
+
+@app.route("/v1/chat/completions", methods=["POST"])
+def openai_chat_completions():
+    """Endpoint OpenAI-compatible avec boucle tools automatique.
+
+    Accepte {model, messages, tools, stream, ...} et gère la boucle
+    function_call → tool_result → function_call localement.
+    """
+    data = request.get_json() or {}
+    messages = data.get("messages", [])
+    if not messages:
+        return jsonify({"error": "messages required"}), 400
+
+    model_name = data.get("model", "gpt-5.5")
+    agent_id = _resolve_agent_id(model_name)
+    tools = data.get("tools", [])
+    max_rounds = data.get("max_tool_rounds", 10)
+    enable_web_search = data.get("enableWebSearch", False)
+    stream = data.get("stream", False)
+
+    # Construire le message initial
+    text = openai_messages_to_text(messages)
+    has_tool_result = any(m.get("role") == "tool" for m in messages)
+    if tools and not has_tool_result:
+        from tool_loop import build_tool_prompt
+        text = text + "\n\n" + build_tool_prompt(tools, model_name=model_name)
+
+    def generate_openai():
+        current_text = text
+        current_agent_id = agent_id
+        chat_id = None
+        model_used = model_name
+
+        for round_num in range(max_rounds):
+            try:
+                if chat_id is None:
+                    events = _run_async(api.create_chat(
+                        message=current_text,
+                        agent_id=current_agent_id,
+                        images=[],
+                        files=[],
+                        enable_web_search=enable_web_search,
+                    ))
+                else:
+                    events = _run_async(api.send_message(
+                        chat_id=chat_id,
+                        message=current_text,
+                        images=[],
+                        files=[],
+                        enable_web_search=enable_web_search,
+                    ))
+            except Exception as e:
+                error_resp = {
+                    "id": f"chatcmpl-error",
+                    "object": "chat.completion",
+                    "created": int(time.time()),
+                    "model": model_name,
+                    "choices": [{
+                        "index": 0,
+                        "finish_reason": "error",
+                        "message": {"role": "assistant", "content": f"Bridge error: {e}"},
+                    }],
+                    "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+                }
+                if stream:
+                    yield f"data: {json.dumps(error_resp)}\n\n"
+                    yield "data: [DONE]\n\n"
+                else:
+                    yield json.dumps(error_resp)
+                return
+
+            output = extract_output_from_events(events)
+
+            chat_id = output.get("chatId") or chat_id
+            model_used = output.get("model") or model_name
+
+            content_text = output.get("content", {}).get("text", "")
+
+            # Vérifier si la réponse contient un function_call
+            if has_function_call(content_text) and tools:
+                fc = parse_function_call(content_text)
+                if fc:
+                    # Renvoyer le function_call à Codex
+                    openai_resp = openai_response_to_sse(output, model_used, delta_mode=stream)
+                    if stream:
+                        yield f"data: {json.dumps(openai_resp)}\n\n"
+                        yield "data: [DONE]\n\n"
+                    else:
+                        yield json.dumps(openai_resp)
+                    return
+                else:
+                    # Parsing échoué, traiter comme texte normal
+                    pass
+
+            # Réponse texte normale → fin
+            openai_resp = openai_response_to_sse(output, model_used, delta_mode=stream)
+            if stream:
+                yield f"data: {json.dumps(openai_resp)}\n\n"
+                yield "data: [DONE]\n\n"
+            else:
+                yield json.dumps(openai_resp)
+            return
+
+        # max_rounds atteint
+        timeout_resp = {
+            "id": f"chatcmpl-timeout",
+            "object": "chat.completion",
+            "created": int(time.time()),
+            "model": model_name,
+            "choices": [{
+                "index": 0,
+                "finish_reason": "length",
+                "message": {"role": "assistant", "content": "[Max tool rounds reached]"},
+            }],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        }
+        if stream:
+            yield f"data: {json.dumps(timeout_resp)}\n\n"
+            yield "data: [DONE]\n\n"
+        else:
+            yield json.dumps(timeout_resp)
+
+    if stream:
+        return Response(
+            stream_with_context(generate_openai()),
+            mimetype="text/event-stream",
+            headers={
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            }
+        )
+    else:
+        raw = "".join(generate_openai())
+        if not raw.strip():
+            return jsonify({"error": "Empty response"}), 500
+        try:
+            return jsonify(json.loads(raw))
+        except Exception:
+            return jsonify({"error": f"Parse error: {raw[:200]}"}), 500
+
+
+# ── Routes existantes suite ────────────────────────────────────────
 
 @app.route("/chat/<chat_id>/message", methods=["POST"])
 def send_chat_message(chat_id):
@@ -336,11 +519,13 @@ def upload_file():
 
 
 def main():
-    print(f"🚀 Bridge Service démarré sur http://{SERVER_HOST}:{SERVER_PORT}")
+    print(f">>> Bridge Service démarré sur http://{SERVER_HOST}:{SERVER_PORT}")
     print(f"   Health: http://{SERVER_HOST}:{SERVER_PORT}/health")
     print(f"   Models: http://{SERVER_HOST}:{SERVER_PORT}/models")
+    print(f"   OpenAI: http://{SERVER_HOST}:{SERVER_PORT}/v1/chat/completions")
     app.run(host=SERVER_HOST, port=SERVER_PORT, debug=False, threaded=True)
 
 
 if __name__ == "__main__":
     main()
+
