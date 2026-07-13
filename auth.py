@@ -1,5 +1,9 @@
 import time
 import json
+import subprocess
+import base64
+import os
+from pathlib import Path
 import httpx
 from config.config import (
     AUTH_EMAIL, AUTH_PASSWORD, API_BASE_URL, FRONTEND_URL,
@@ -41,19 +45,48 @@ class AuthManager:
             "expires_at_sec": self._expires_at_sec,
         }))
 
-    def _login_via_api(self):
-        r = self._client.post(
-            f"{API_BASE_URL}/user/login",
-            json={"email": AUTH_EMAIL, "password": AUTH_PASSWORD},
+    def _parse_jwt_expiry(self, token):
+        """Extract expiry timestamp from JWT payload."""
+        try:
+            parts = token.split('.')
+            payload_b64 = parts[1] + '=' * (4 - len(parts[1]) % 4)
+            data = json.loads(base64.urlsafe_b64decode(payload_b64))
+            return data.get('exp', time.time() + 300)
+        except Exception:
+            return time.time() + 300
+
+    def _login_via_puppeteer(self):
+        """Get JWT via Puppeteer headless SSO flow (WHMCS -> IA portal)."""
+        script_path = Path(__file__).parent / "get_jwt.js"
+        if not script_path.exists():
+            raise RuntimeError(f"get_jwt.js introuvable: {script_path}")
+
+        env = os.environ.copy()
+        env["FS_EMAIL"] = AUTH_EMAIL
+        env["FS_PASSWORD"] = AUTH_PASSWORD
+
+        print("[AUTH] Lancement Puppeteer SSO...")
+        result = subprocess.run(
+            ["node", str(script_path)],
+            capture_output=True, text=True, timeout=120,
+            env=env,
         )
-        r.raise_for_status()
-        data = r.json()
-        self._token = data["token"]
-        self._expires_at_sec = time.time() + 86400
+
+        if result.returncode != 0:
+            raise RuntimeError(f"Puppeteer SSO echoue: {result.stderr.strip()}")
+
+        token = result.stdout.strip()
+        if not token or len(token) < 50:
+            raise RuntimeError(f"JWT invalide depuis Puppeteer: {token[:30]}...")
+
+        self._token = token
+        self._expires_at_sec = self._parse_jwt_expiry(token)
         self._save_store()
+        print(f"[AUTH] JWT obtenu (expire dans {int(self._expires_at_sec - time.time())}s)")
         return self._token
 
     def _get_token_via_nextauth(self):
+        """Fallback: get JWT if NextAuth session cookies are present."""
         r = self._client.get(
             f"{AUTH_API_URL}/api-token",
             cookies=self._client.cookies,
@@ -61,22 +94,25 @@ class AuthManager:
         r.raise_for_status()
         data = r.json()
         self._token = data["accessToken"]
-        self._expires_at_sec = data["expiresAt"]
+        self._expires_at_sec = data.get("expiresAt", self._parse_jwt_expiry(self._token))
         self._save_store()
         return self._token
 
     def _do_auth_flow(self):
+        # 1. Puppeteer SSO (primary)
         try:
-            return self._login_via_api()
-        except Exception:
-            pass
+            return self._login_via_puppeteer()
+        except Exception as e:
+            print(f"[AUTH] Puppeteer echoue: {e}")
+
+        # 2. NextAuth cookies (fallback)
         try:
             return self._get_token_via_nextauth()
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[AUTH] NextAuth fallback echoue: {e}")
+
         raise RuntimeError(
-            "Impossible de s'authentifier. Vérifie FS_EMAIL / FS_PASSWORD "
-            "ou fournis un cookie de session NextAuth."
+            "Impossible de s'authentifier. Verifie FS_EMAIL / FS_PASSWORD."
         )
 
     def get_token(self, force=False):

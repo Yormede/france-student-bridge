@@ -1,0 +1,8 @@
+{
+  "name": "france-student-bridge",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "puppeteer-core": "^23.11.1"
+  }
+}

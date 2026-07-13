@@ -1,0 +1,16 @@
+services:
+  france-student-bridge:
+    build: .
+    image: fs-bridge:latest
+    container_name: fs-bridge
+    network_mode: host
+    restart: unless-stopped
+    environment:
+      - FS_EMAIL=${FS_EMAIL}
+      - FS_PASSWORD=${FS_PASSWORD}
+      - BIND_HOST=0.0.0.0
+      - BIND_PORT=8765
+      - CHROME_PATH=/usr/bin/chromium
+    volumes:
+      - ./storage:/app/storage
+      - ./store.json:/app/store.json

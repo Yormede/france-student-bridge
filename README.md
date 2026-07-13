@@ -1,6 +1,6 @@
 <p align="center">
   <img src="https://img.shields.io/badge/status-operational-brightgreen?style=for-the-badge" />
-  <img src="https://img.shields.io/badge/models-7%2F12-blue?style=for-the-badge" />
+  <img src="https://img.shields.io/badge/models-10%2F10-brightgreen?style=for-the-badge" />
   <img src="https://img.shields.io/badge/python-3.8%2B-yellow?style=for-the-badge&logo=python" />
   <img src="https://img.shields.io/badge/platform-Win%20%7C%20Linux%20%7C%20Mac-purple?style=for-the-badge" />
   <img src="https://img.shields.io/badge/license-MIT-green?style=for-the-badge" />
@@ -25,28 +25,26 @@
 
 Ce **Bridge Service** est un serveur local qui fait le pont entre ton **harness IA prefere** (OpenCode, Pi, Codex, OpenGravity, Cursor...) et le chatbot France Student. Il expose une API REST propre qui traduit tes requetes en appels vers France Student, et te renvoie les reponses — texte, code, raisonnement, images generees — dans un format standard.
 
-> **En clair** : ton harness peut maintenant parler a GPT-5.5, Claude Opus 4, DeepSeek V3.2 et 9 autres modeles, gratuitement, sans quitter ton terminal.
+> **En clair** : ton harness peut maintenant parler a GPT-5.6, Claude Sonnet 5, DeepSeek V3.2 et 7 autres modeles, gratuitement, sans quitter ton terminal.
 
 ---
 
-## Modeles disponibles (teste le 06/07/2026)
+## Modeles disponibles (teste le 10/07/2026)
 
 | Statut | Modele | Fournisseur | ID |
 |--------|--------|-------------|-----|
-| | **claude-sonnet-4-6** | Anthropic | `50` |
+| | **gpt-5.6-sol** | OpenAI | `64` (defaut) |
+| | **gpt-5.6-luna** | OpenAI | `65` |
+| | **gpt-5.6-terra** | OpenAI | `66` |
+| | **claude-sonnet-5** | Anthropic | `63` |
 | | **claude-opus-4-8** | Anthropic | `100` |
 | | **claude-haiku-4-5** | Anthropic | `51` |
 | | **DeepSeek-V3.2** | DeepSeek | `40` |
 | | **Mistral-Large-3** | Mistral | `43` |
 | | **Kimi-K2.5** | Kimi | `42` |
-| | **gpt-5.4-nano** | OpenAI | `59` |
-| | gpt-5.5 | OpenAI | `101` — overload 503 |
-| | gpt-5.4 | OpenAI | `41` — overload 503 |
-| | gpt-5.4-mini | OpenAI | `45` — indisponible |
-| | gpt-oss-120b | OpenAI | `58` — indisponible |
-| | FW-GLM-5 | xAi | `60` — indisponible |
+| | **FW-GLM-5** | xAi | `60` |
 
-> Les modeles marques d'un rond vert fonctionnent. Les autres sont temporairement indisponibles cote France Student.
+> Les 10 modeles sont actifs et fonctionnels.
 
 ---
 

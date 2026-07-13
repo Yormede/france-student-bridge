@@ -7,7 +7,7 @@ import re
 import time
 from config.config import MAX_RETRIES, RETRY_DELAYS
 
-TOOL_NATIVE_MODELS = {"Mistral-Large-3", "Kimi-K2.5", "DeepSeek-V3.2"}
+TOOL_NATIVE_MODELS = {"Mistral-Large-3", "Kimi-K2.5", "DeepSeek-V3.2", "FW-GLM-5"}
 
 
 def is_tool_native(model_name):

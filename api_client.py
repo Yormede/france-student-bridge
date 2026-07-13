@@ -7,32 +7,16 @@ class FranceStudentAPI:
     def __init__(self, auth):
         self._auth = auth
 
-    async def _get(self, session, path, **kwargs):
-        return await session.get(
-            f"{API_BASE_URL}{path}",
-            headers=self._auth.get_headers(),
-            **kwargs,
-        )
-
-    async def _post(self, session, path, json=None, **kwargs):
-        return await session.post(
-            f"{API_BASE_URL}{path}",
-            headers=self._auth.get_headers(),
-            json=json,
-            **kwargs,
-        )
-
-    async def _delete(self, session, path, **kwargs):
-        return await session.delete(
-            f"{API_BASE_URL}{path}",
-            headers=self._auth.get_headers(),
-            **kwargs,
-        )
+    def _headers(self):
+        return self._auth.get_headers()
 
     async def get_models(self):
         import httpx
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as c:
-            r = await self._get(c, "/chats/agents?include-disabled=false")
+            r = await c.get(
+                f"{API_BASE_URL}/chats/agents?include-disabled=false",
+                headers=self._headers(),
+            )
             r.raise_for_status()
             agents = r.json()
             return [
@@ -56,16 +40,22 @@ class FranceStudentAPI:
             "agentId": agent_id,
             "initialContent": message,
             "images": images or [],
-            "files": files or [],
             "enableWebSearch": enable_web_search,
+            "isIncognito": False,
+            "isPrivate": True,
         }
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as c:
-            r = await self._post(c, "/chats", json=body)
-            r.raise_for_status()
-            events = []
-            async for ev in parse_sse_stream(r):
-                events.append(ev)
-            return events
+            async with c.stream(
+                "POST",
+                f"{API_BASE_URL}/chats/stream",
+                headers=self._headers(),
+                json=body,
+            ) as r:
+                r.raise_for_status()
+                events = []
+                async for ev in parse_sse_stream(r):
+                    events.append(ev)
+                return events
 
     async def send_message(self, chat_id, message, images=None, files=None,
                            enable_web_search=False):
@@ -73,38 +63,47 @@ class FranceStudentAPI:
         body = {
             "content": message,
             "images": images or [],
-            "files": files or [],
             "enableWebSearch": enable_web_search,
         }
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as c:
-            r = await self._post(c, f"/chats/{chat_id}", json=body)
-            r.raise_for_status()
-            events = []
-            async for ev in parse_sse_stream(r):
-                events.append(ev)
-            return events
+            async with c.stream(
+                "POST",
+                f"{API_BASE_URL}/chats/{chat_id}",
+                headers=self._headers(),
+                json=body,
+            ) as r:
+                r.raise_for_status()
+                events = []
+                async for ev in parse_sse_stream(r):
+                    events.append(ev)
+                return events
 
     async def reconnect_stream(self, chat_id, last_event_id):
         import httpx
+        headers = {
+            **self._headers(),
+            "Last-Event-ID": str(last_event_id),
+        }
         async with httpx.AsyncClient(timeout=SSE_TIMEOUT) as c:
-            r = await self._get(
-                c, f"/chats/{chat_id}/stream",
+            async with c.stream(
+                "GET",
+                f"{API_BASE_URL}/chats/{chat_id}/stream",
+                headers=headers,
                 params={"last_event_id": last_event_id},
-                headers={
-                    **self._auth.get_headers(),
-                    "Last-Event-ID": str(last_event_id),
-                }
-            )
-            r.raise_for_status()
-            events = []
-            async for ev in parse_sse_stream(r):
-                events.append(ev)
-            return events
+            ) as r:
+                r.raise_for_status()
+                events = []
+                async for ev in parse_sse_stream(r):
+                    events.append(ev)
+                return events
 
     async def get_chat(self, chat_id):
         import httpx
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as c:
-            r = await self._get(c, f"/chats/{chat_id}")
+            r = await c.get(
+                f"{API_BASE_URL}/chats/{chat_id}",
+                headers=self._headers(),
+            )
             r.raise_for_status()
             return r.json()
 
@@ -114,20 +113,30 @@ class FranceStudentAPI:
         if cursor_chat_id:
             params["cursor_chat_id"] = cursor_chat_id
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as c:
-            r = await self._get(c, "/chats", params=params)
+            r = await c.get(
+                f"{API_BASE_URL}/chats",
+                headers=self._headers(),
+                params=params,
+            )
             r.raise_for_status()
             return r.json()
 
     async def delete_chat(self, chat_id):
         import httpx
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as c:
-            r = await self._delete(c, f"/chats/{chat_id}")
+            r = await c.delete(
+                f"{API_BASE_URL}/chats/{chat_id}",
+                headers=self._headers(),
+            )
             r.raise_for_status()
 
     async def get_chat_usage(self, chat_id):
         import httpx
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as c:
-            r = await self._get(c, f"/chats/{chat_id}/usage")
+            r = await c.get(
+                f"{API_BASE_URL}/chats/{chat_id}/usage",
+                headers=self._headers(),
+            )
             r.raise_for_status()
             return r.json()
 
@@ -139,7 +148,7 @@ class FranceStudentAPI:
             with open(file_path, "rb") as f:
                 r = await c.post(
                     f"{API_BASE_URL}/filesv2",
-                    headers={"Authorization": self._auth.get_headers()["Authorization"]},
+                    headers={"Authorization": self._headers()["Authorization"]},
                     files={"file": (file_path.name, f, "application/octet-stream")},
                 )
             r.raise_for_status()
@@ -148,8 +157,9 @@ class FranceStudentAPI:
     async def get_image(self, chat_id, message_id, image_id):
         import httpx
         async with httpx.AsyncClient(timeout=REQUEST_TIMEOUT) as c:
-            r = await self._get(
-                c, f"/chats/{chat_id}/messages/{message_id}/images/{image_id}"
+            r = await c.get(
+                f"{API_BASE_URL}/chats/{chat_id}/messages/{message_id}/images/{image_id}",
+                headers=self._headers(),
             )
             r.raise_for_status()
             return r.content, r.headers.get("content-type", "image/png")
